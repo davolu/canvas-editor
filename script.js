@@ -5,9 +5,11 @@ class CanvasEditor {
         this.ctx = this.canvas.getContext('2d');
         this.elements = [];
         this.selectedElement = null;
-        this.currentTool = null;
+        this.currentTool = 'select';
         this.isDrawing = false;
         this.isDragging = false;
+        this.isResizing = false;
+        this.resizeHandle = null;
         this.dragStart = { x: 0, y: 0 };
         this.elementIdCounter = 0;
 
@@ -98,11 +100,30 @@ class CanvasEditor {
         this.currentTool = tool;
         document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
         document.querySelector(`[data-tool="${tool}"]`).classList.add('active');
-        this.canvas.style.cursor = tool === 'text' ? 'text' : 'crosshair';
+
+        // Set appropriate cursor for each tool
+        if (tool === 'select') {
+            this.canvas.style.cursor = 'default';
+        } else if (tool === 'text') {
+            this.canvas.style.cursor = 'text';
+        } else {
+            this.canvas.style.cursor = 'crosshair';
+        }
     }
 
     handleMouseDown(e) {
         const pos = this.getMousePos(e);
+
+        // Check if clicking on resize handle first
+        if (this.selectedElement) {
+            const handle = this.getResizeHandle(pos.x, pos.y);
+            if (handle) {
+                this.isResizing = true;
+                this.resizeHandle = handle;
+                this.dragStart = { x: pos.x, y: pos.y };
+                return;
+            }
+        }
 
         // Check if clicking on existing element
         const clickedElement = this.getElementAtPosition(pos.x, pos.y);
@@ -115,7 +136,10 @@ class CanvasEditor {
             this.updateLayersList();
         } else {
             this.selectedElement = null;
-            this.createNewElement(pos);
+            // Only create new elements if we're not using the select tool
+            if (this.currentTool !== 'select') {
+                this.createNewElement(pos);
+            }
         }
 
         this.render();
@@ -124,21 +148,61 @@ class CanvasEditor {
     handleMouseMove(e) {
         const pos = this.getMousePos(e);
 
-        if (this.isDragging && this.selectedElement) {
+        if (this.isResizing && this.selectedElement && this.resizeHandle) {
+            this.handleResize(pos);
+        } else if (this.isDragging && this.selectedElement) {
             const dx = pos.x - this.dragStart.x;
             const dy = pos.y - this.dragStart.y;
 
+            // Move the element's position
             this.selectedElement.x += dx;
             this.selectedElement.y += dy;
 
+            // For lines, also move the end point to maintain the line's shape
+            if (this.selectedElement.type === 'line') {
+                this.selectedElement.endX += dx;
+                this.selectedElement.endY += dy;
+            }
+
             this.dragStart = { x: pos.x, y: pos.y };
             this.render();
+        } else if (this.currentTool === 'select') {
+            // Update cursor based on what's under the mouse when using select tool
+            if (this.selectedElement) {
+                const handle = this.getResizeHandle(pos.x, pos.y);
+                if (handle) {
+                    this.canvas.style.cursor = this.getResizeCursor(handle);
+                } else if (this.getElementAtPosition(pos.x, pos.y)) {
+                    this.canvas.style.cursor = 'move';
+                } else {
+                    this.canvas.style.cursor = 'default';
+                }
+            } else {
+                // Show appropriate cursor when hovering over elements
+                const hoveredElement = this.getElementAtPosition(pos.x, pos.y);
+                if (hoveredElement) {
+                    this.canvas.style.cursor = 'pointer';
+                } else {
+                    this.canvas.style.cursor = 'default';
+                }
+            }
         }
     }
 
     handleMouseUp(e) {
         this.isDragging = false;
         this.isDrawing = false;
+        this.isResizing = false;
+        this.resizeHandle = null;
+
+        // Reset cursor based on current tool
+        if (this.currentTool === 'select') {
+            this.canvas.style.cursor = 'default';
+        } else if (this.currentTool === 'text') {
+            this.canvas.style.cursor = 'text';
+        } else {
+            this.canvas.style.cursor = 'crosshair';
+        }
     }
 
     handleDoubleClick(e) {
@@ -151,7 +215,7 @@ class CanvasEditor {
     }
 
     createNewElement(pos) {
-        if (!this.currentTool) return;
+        if (!this.currentTool || this.currentTool === 'select') return;
 
         const element = {
             id: ++this.elementIdCounter,
@@ -170,7 +234,9 @@ class CanvasEditor {
                     fontFamily: 'Poppins',
                     color: '#000000',
                     textAlign: 'left',
-                    fontWeight: 'normal'
+                    fontWeight: 'normal',
+                    width: 200,
+                    lineHeight: 1.4
                 });
                 break;
 
@@ -322,7 +388,7 @@ class CanvasEditor {
                 this.ctx.font = `${element.fontWeight} ${element.fontSize}px ${element.fontFamily}`;
                 this.ctx.fillStyle = element.color;
                 this.ctx.textAlign = element.textAlign;
-                this.ctx.fillText(element.text, element.x, element.y);
+                this.renderWrappedText(element);
                 break;
 
             case 'line':
@@ -366,6 +432,241 @@ class CanvasEditor {
         this.ctx.restore();
     }
 
+    renderWrappedText(element) {
+        const words = element.text.split(' ');
+        let line = '';
+        let y = element.y;
+        const lineHeight = element.fontSize * element.lineHeight;
+        const maxWidth = element.width;
+
+        for (let n = 0; n < words.length; n++) {
+            const testLine = line + words[n] + ' ';
+            const metrics = this.ctx.measureText(testLine);
+            const testWidth = metrics.width;
+
+            if (testWidth > maxWidth && n > 0) {
+                this.ctx.fillText(line.trim(), element.x, y);
+                line = words[n] + ' ';
+                y += lineHeight;
+            } else {
+                line = testLine;
+            }
+        }
+        this.ctx.fillText(line.trim(), element.x, y);
+    }
+
+    getResizeHandle(x, y) {
+        if (!this.selectedElement) return null;
+
+        const handles = this.getResizeHandles(this.selectedElement);
+        const handleSize = 8;
+
+        for (let handle of handles) {
+            if (x >= handle.x - handleSize && x <= handle.x + handleSize &&
+                y >= handle.y - handleSize && y <= handle.y + handleSize) {
+                return handle.type;
+            }
+        }
+        return null;
+    }
+
+    getResizeHandles(element) {
+        const handles = [];
+
+        switch (element.type) {
+            case 'line':
+                handles.push(
+                    { type: 'start', x: element.x, y: element.y },
+                    { type: 'end', x: element.endX, y: element.endY }
+                );
+                break;
+
+            case 'text':
+                const textBounds = this.getTextBounds(element);
+                handles.push(
+                    { type: 'nw', x: textBounds.x, y: textBounds.y },
+                    { type: 'ne', x: textBounds.x + textBounds.width, y: textBounds.y },
+                    { type: 'sw', x: textBounds.x, y: textBounds.y + textBounds.height },
+                    { type: 'se', x: textBounds.x + textBounds.width, y: textBounds.y + textBounds.height },
+                    { type: 'e', x: textBounds.x + textBounds.width, y: textBounds.y + textBounds.height / 2 }
+                );
+                break;
+
+            case 'rectangle':
+                handles.push(
+                    { type: 'nw', x: element.x, y: element.y },
+                    { type: 'ne', x: element.x + element.width, y: element.y },
+                    { type: 'sw', x: element.x, y: element.y + element.height },
+                    { type: 'se', x: element.x + element.width, y: element.y + element.height },
+                    { type: 'n', x: element.x + element.width / 2, y: element.y },
+                    { type: 's', x: element.x + element.width / 2, y: element.y + element.height },
+                    { type: 'w', x: element.x, y: element.y + element.height / 2 },
+                    { type: 'e', x: element.x + element.width, y: element.y + element.height / 2 }
+                );
+                break;
+
+            case 'circle':
+                handles.push(
+                    { type: 'n', x: element.x, y: element.y - element.radius },
+                    { type: 's', x: element.x, y: element.y + element.radius },
+                    { type: 'w', x: element.x - element.radius, y: element.y },
+                    { type: 'e', x: element.x + element.radius, y: element.y }
+                );
+                break;
+
+            case 'image':
+                handles.push(
+                    { type: 'nw', x: element.x, y: element.y },
+                    { type: 'ne', x: element.x + element.width, y: element.y },
+                    { type: 'sw', x: element.x, y: element.y + element.height },
+                    { type: 'se', x: element.x + element.width, y: element.y + element.height },
+                    { type: 'n', x: element.x + element.width / 2, y: element.y },
+                    { type: 's', x: element.x + element.width / 2, y: element.y + element.height },
+                    { type: 'w', x: element.x, y: element.y + element.height / 2 },
+                    { type: 'e', x: element.x + element.width, y: element.y + element.height / 2 }
+                );
+                break;
+        }
+
+        return handles;
+    }
+
+    getTextBounds(element) {
+        this.ctx.font = `${element.fontWeight} ${element.fontSize}px ${element.fontFamily}`;
+        const words = element.text.split(' ');
+        let line = '';
+        let maxWidth = 0;
+        let lineCount = 1;
+        const lineHeight = element.fontSize * element.lineHeight;
+
+        for (let n = 0; n < words.length; n++) {
+            const testLine = line + words[n] + ' ';
+            const metrics = this.ctx.measureText(testLine);
+            const testWidth = metrics.width;
+
+            if (testWidth > element.width && n > 0) {
+                maxWidth = Math.max(maxWidth, this.ctx.measureText(line.trim()).width);
+                line = words[n] + ' ';
+                lineCount++;
+            } else {
+                line = testLine;
+            }
+        }
+        maxWidth = Math.max(maxWidth, this.ctx.measureText(line.trim()).width);
+
+        return {
+            x: element.x,
+            y: element.y - element.fontSize,
+            width: Math.min(maxWidth, element.width),
+            height: lineCount * lineHeight
+        };
+    }
+
+    getResizeCursor(handleType) {
+        const cursors = {
+            'nw': 'nw-resize', 'ne': 'ne-resize', 'sw': 'sw-resize', 'se': 'se-resize',
+            'n': 'n-resize', 's': 's-resize', 'w': 'w-resize', 'e': 'e-resize',
+            'start': 'grab', 'end': 'grab'
+        };
+        return cursors[handleType] || 'grab';
+    }
+
+    handleResize(pos) {
+        const dx = pos.x - this.dragStart.x;
+        const dy = pos.y - this.dragStart.y;
+        const element = this.selectedElement;
+
+        switch (element.type) {
+            case 'line':
+                if (this.resizeHandle === 'start') {
+                    element.x = pos.x;
+                    element.y = pos.y;
+                } else if (this.resizeHandle === 'end') {
+                    element.endX = pos.x;
+                    element.endY = pos.y;
+                }
+                break;
+
+            case 'text':
+                if (this.resizeHandle === 'e') {
+                    element.width = Math.max(50, element.width + dx);
+                } else if (this.resizeHandle.includes('e')) {
+                    element.width = Math.max(50, element.width + dx);
+                }
+                if (this.resizeHandle.includes('s')) {
+                    // Height is calculated automatically based on content
+                }
+                break;
+
+            case 'rectangle':
+                this.resizeRectangle(element, this.resizeHandle, dx, dy);
+                break;
+
+            case 'circle':
+                if (this.resizeHandle === 'n' || this.resizeHandle === 's') {
+                    element.radius = Math.max(10, Math.abs(pos.y - element.y));
+                } else if (this.resizeHandle === 'w' || this.resizeHandle === 'e') {
+                    element.radius = Math.max(10, Math.abs(pos.x - element.x));
+                }
+                break;
+
+            case 'image':
+                this.resizeRectangle(element, this.resizeHandle, dx, dy);
+                break;
+        }
+
+        this.dragStart = { x: pos.x, y: pos.y };
+        this.render();
+        this.updatePropertiesPanel();
+    }
+
+    resizeRectangle(element, handle, dx, dy) {
+        switch (handle) {
+            case 'nw':
+                element.x += dx;
+                element.y += dy;
+                element.width -= dx;
+                element.height -= dy;
+                break;
+            case 'ne':
+                element.y += dy;
+                element.width += dx;
+                element.height -= dy;
+                break;
+            case 'sw':
+                element.x += dx;
+                element.width -= dx;
+                element.height += dy;
+                break;
+            case 'se':
+                element.width += dx;
+                element.height += dy;
+                break;
+            case 'n':
+                element.y += dy;
+                element.height -= dy;
+                break;
+            case 's':
+                element.height += dy;
+                break;
+            case 'w':
+                element.x += dx;
+                element.width -= dx;
+                break;
+            case 'e':
+                element.width += dx;
+                break;
+        }
+
+        // Ensure minimum size
+        if (element.width < 20) {
+            element.width = 20;
+        }
+        if (element.height < 20) {
+            element.height = 20;
+        }
+    }
+
     highlightElement(element) {
         this.ctx.save();
         this.ctx.strokeStyle = '#3b82f6';
@@ -375,20 +676,31 @@ class CanvasEditor {
         let bounds = this.getElementBounds(element);
         this.ctx.strokeRect(bounds.x - 5, bounds.y - 5, bounds.width + 10, bounds.height + 10);
 
+        // Draw resize handles
+        this.drawResizeHandles(element);
+
         this.ctx.restore();
+    }
+
+    drawResizeHandles(element) {
+        const handles = this.getResizeHandles(element);
+        const handleSize = 8;
+
+        this.ctx.fillStyle = '#3b82f6';
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]);
+
+        handles.forEach(handle => {
+            this.ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+            this.ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+        });
     }
 
     getElementBounds(element) {
         switch (element.type) {
             case 'text':
-                this.ctx.font = `${element.fontWeight} ${element.fontSize}px ${element.fontFamily}`;
-                const textWidth = this.ctx.measureText(element.text).width;
-                return {
-                    x: element.x,
-                    y: element.y - element.fontSize,
-                    width: textWidth,
-                    height: element.fontSize
-                };
+                return this.getTextBounds(element);
 
             case 'rectangle':
                 return {
@@ -470,16 +782,20 @@ class CanvasEditor {
                             <input type="number" id="fontSize" value="${element.fontSize}" min="8" max="200" onchange="canvasEditor.updateElementProperty('fontSize', parseInt(this.value))">
                         </div>
                         <div class="property-group">
-                            <label>Font Family:</label>
-                            <select id="fontFamily" onchange="canvasEditor.updateElementProperty('fontFamily', this.value)">
-                                <option value="Poppins" ${element.fontFamily === 'Poppins' ? 'selected' : ''}>Poppins</option>
-                                <option value="Inter" ${element.fontFamily === 'Inter' ? 'selected' : ''}>Inter</option>
-                                <option value="Roboto" ${element.fontFamily === 'Roboto' ? 'selected' : ''}>Roboto</option>
-                                <option value="Arial" ${element.fontFamily === 'Arial' ? 'selected' : ''}>Arial</option>
-                                <option value="serif" ${element.fontFamily === 'serif' ? 'selected' : ''}>Serif</option>
-                                <option value="monospace" ${element.fontFamily === 'monospace' ? 'selected' : ''}>Monospace</option>
-                            </select>
+                            <label>Width:</label>
+                            <input type="number" id="textWidth" value="${Math.round(element.width)}" min="50" max="800" onchange="canvasEditor.updateElementProperty('width', parseInt(this.value))">
                         </div>
+                    </div>
+                    <div class="property-group">
+                        <label>Font Family:</label>
+                        <select id="fontFamily" onchange="canvasEditor.updateElementProperty('fontFamily', this.value)">
+                            <option value="Poppins" ${element.fontFamily === 'Poppins' ? 'selected' : ''}>Poppins</option>
+                            <option value="Inter" ${element.fontFamily === 'Inter' ? 'selected' : ''}>Inter</option>
+                            <option value="Roboto" ${element.fontFamily === 'Roboto' ? 'selected' : ''}>Roboto</option>
+                            <option value="Arial" ${element.fontFamily === 'Arial' ? 'selected' : ''}>Arial</option>
+                            <option value="serif" ${element.fontFamily === 'serif' ? 'selected' : ''}>Serif</option>
+                            <option value="monospace" ${element.fontFamily === 'monospace' ? 'selected' : ''}>Monospace</option>
+                        </select>
                     </div>
                     <div class="property-row">
                         <div class="property-group">
@@ -493,6 +809,20 @@ class CanvasEditor {
                                 <option value="bold" ${element.fontWeight === 'bold' ? 'selected' : ''}>Bold</option>
                                 <option value="300" ${element.fontWeight === '300' ? 'selected' : ''}>Light</option>
                                 <option value="600" ${element.fontWeight === '600' ? 'selected' : ''}>Semi Bold</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="property-row">
+                        <div class="property-group">
+                            <label>Line Height:</label>
+                            <input type="number" id="lineHeight" value="${element.lineHeight}" min="1" max="3" step="0.1" onchange="canvasEditor.updateElementProperty('lineHeight', parseFloat(this.value))">
+                        </div>
+                        <div class="property-group">
+                            <label>Text Align:</label>
+                            <select id="textAlign" onchange="canvasEditor.updateElementProperty('textAlign', this.value)">
+                                <option value="left" ${element.textAlign === 'left' ? 'selected' : ''}>Left</option>
+                                <option value="center" ${element.textAlign === 'center' ? 'selected' : ''}>Center</option>
+                                <option value="right" ${element.textAlign === 'right' ? 'selected' : ''}>Right</option>
                             </select>
                         </div>
                     </div>

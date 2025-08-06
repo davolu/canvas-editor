@@ -19,9 +19,9 @@
                 <h1 class="app-title">Canvas Editor</h1>
                 <div class="canvas-size-controls">
                     <label>Width:</label>
-                    <input type="number" id="canvasWidth" value="800" min="100" max="2000">
+                    <input type="number" id="canvasWidth" value="500" min="100" max="2000">
                     <label>Height:</label>
-                    <input type="number" id="canvasHeight" value="600" min="100" max="2000">
+                    <input type="number" id="canvasHeight" value="650" min="100" max="2000">
                     <button id="resizeCanvas">Resize</button>
                 </div>
             </div>
@@ -37,8 +37,12 @@
             <!-- Left Sidebar - Tools -->
             <aside class="sidebar-left">
                 <div class="tool-section">
-                    <h3>Elements</h3>
+                    <h3>Tools</h3>
                     <div class="tool-grid">
+                        <button class="tool-btn active" data-tool="select">
+                            <span class="tool-icon">↖</span>
+                            Select
+                        </button>
                         <button class="tool-btn" data-tool="text">
                             <span class="tool-icon">T</span>
                             Text
@@ -81,7 +85,7 @@
             <!-- Canvas Area -->
             <main class="canvas-container">
                 <div class="canvas-wrapper">
-                    <canvas id="mainCanvas" width="800" height="600"></canvas>
+                    <canvas id="mainCanvas" width="500" height="650"></canvas>
                     <div id="selectionBox" class="selection-box"></div>
                 </div>
             </main>
